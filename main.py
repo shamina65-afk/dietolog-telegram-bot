@@ -2,44 +2,78 @@ import os
 import requests
 from flask import Flask, request
 
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-SYSTEM_PROMPT = os.getenv("SYSTEM_PROMPT")
-
-TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
-OPENAI_API_URL = "https://api.openai.com/v1/chat/completions"
-
 app = Flask(__name__)
 
-def send_message(chat_id, text):
-    requests.post(
-        f"{TELEGRAM_API_URL}/sendMessage",
-        json={"chat_id": chat_id, "text": text}
-    )
+# === НАСТРОЙКИ ===
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+YANDEX_API_KEY = os.environ.get("YANDEX_API_KEY")
+FOLDER_ID = os.environ.get("FOLDER_ID")
 
-def ask_openai(message):
-    headers = {
-        "Authorization": f"Bearer {OPENAI_API_KEY}",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "model": "gpt-4o",
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": message}
-        ]
-    }
-    response = requests.post(OPENAI_API_URL, headers=headers, json=payload)
-    return response.json()["choices"][0]["message"]["content"]
+YANDEX_GPT_URL = "https://llm.api.cloud.yandex.net/foundationModels/v1/completion"
+
+SYSTEM_PROMPT = """
+Ты — профессиональный диетолог.
+Твоя задача — составлять рацион питания по калорийности,
+подбирать рецепты, рассчитывать БЖУ и ориентировочную стоимость блюд.
+
+Всегда сначала уточняй:
+- возраст
+- пол
+- рост
+- вес
+- уровень физической активности
+- цель (похудение / поддержание / набор)
+
+Если данных нет — предложи обзорный рацион и объясни,
+что для точных расчётов нужны параметры.
+"""
+
+# === TELEGRAM ===
+def send_message(chat_id, text):
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    requests.post(url, json={
+        "chat_id": chat_id,
+        "text": text
+    })
+
 
 @app.route("/", methods=["POST"])
 def webhook():
     data = request.json
-    chat_id = data["message"]["chat"]["id"]
-    text = data["message"]["text"]
-    reply = ask_openai(text)
-    send_message(chat_id, reply)
+    message = data.get("message", {})
+    text = message.get("text", "")
+    chat_id = message.get("chat", {}).get("id")
+
+    if not text:
+        return "ok"
+
+    headers = {
+        "Authorization": f"Api-Key {YANDEX_API_KEY}",
+        "Content-Type": "application/json"
+    }
+
+    payload = {
+        "modelUri": f"gpt://{FOLDER_ID}/yandexgpt/5.1-pro",
+        "completionOptions": {
+            "stream": False,
+            "temperature": 0.4,
+            "maxTokens": 1500
+        },
+        "messages": [
+            {"role": "system", "text": SYSTEM_PROMPT},
+            {"role": "user", "text": text}
+        ]
+    }
+
+    response = requests.post(YANDEX_GPT_URL, headers=headers, json=payload)
+    result = response.json()
+
+    answer = result["result"]["alternatives"][0]["message"]["text"]
+    send_message(chat_id, answer)
+
     return "ok"
 
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+
+@app.route("/", methods=["GET"])
+def health():
+    return "Bot is running"
