@@ -1,8 +1,6 @@
 import os
+import json
 import requests
-from flask import Flask, request
-
-app = Flask(__name__)
 
 # === НАСТРОЙКИ ===
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
@@ -37,43 +35,59 @@ def send_message(chat_id, text):
     })
 
 
-@app.route("/", methods=["POST"])
-def webhook():
-    data = request.json
-    message = data.get("message", {})
-    text = message.get("text", "")
-    chat_id = message.get("chat", {}).get("id")
+# === CLOUD FUNCTION ENTRY POINT ===
+def handler(event, context):
+    try:
+        body = json.loads(event["body"])
+        message = body.get("message", {})
+        text = message.get("text")
+        chat_id = message.get("chat", {}).get("id")
 
-    if not text:
-        return "ok"
+        if not text or not chat_id:
+            return {"statusCode": 200, "body": "ok"}
 
-    headers = {
-        "Authorization": f"Api-Key {YANDEX_API_KEY}",
-        "Content-Type": "application/json"
-    }
+        # /start
+        if text == "/start":
+            send_message(
+                chat_id,
+                "Привет! Я Диетолог 24/7 😊\n\n"
+                "Я помогу составить рацион, рассчитать калории и БЖУ.\n"
+                "Напиши, с какой целью ты хочешь питание."
+            )
+            return {"statusCode": 200, "body": "ok"}
 
-    payload = {
-        "modelUri": f"gpt://{FOLDER_ID}/yandexgpt/5.1-pro",
-        "completionOptions": {
-            "stream": False,
-            "temperature": 0.4,
-            "maxTokens": 1500
-        },
-        "messages": [
-            {"role": "system", "text": SYSTEM_PROMPT},
-            {"role": "user", "text": text}
-        ]
-    }
+        headers = {
+            "Authorization": f"Api-Key {YANDEX_API_KEY}",
+            "Content-Type": "application/json"
+        }
 
-    response = requests.post(YANDEX_GPT_URL, headers=headers, json=payload)
-    result = response.json()
+        payload = {
+            "modelUri": f"gpt://{FOLDER_ID}/yandexgpt/5.1-pro",
+            "completionOptions": {
+                "stream": False,
+                "temperature": 0.4,
+                "maxTokens": 1500
+            },
+            "messages": [
+                {"role": "system", "text": SYSTEM_PROMPT},
+                {"role": "user", "text": text}
+            ]
+        }
 
-    answer = result["result"]["alternatives"][0]["message"]["text"]
-    send_message(chat_id, answer)
+        response = requests.post(
+            YANDEX_GPT_URL,
+            headers=headers,
+            json=payload,
+            timeout=10
+        )
 
-    return "ok"
+        result = response.json()
+        answer = result["result"]["alternatives"][0]["message"]["text"]
 
+        send_message(chat_id, answer)
 
-@app.route("/", methods=["GET"])
-def health():
-    return "Bot is running"
+        return {"statusCode": 200, "body": "ok"}
+
+    except Exception as e:
+        print("ERROR:", str(e))
+        return {"statusCode": 200, "body": "error"}
